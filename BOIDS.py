@@ -8,7 +8,7 @@ from collections import deque
 class Environment():
     
     def __init__(self,nfish=0,player='none',width=1535,height=862,
-                 fullscreen=True,period=0.01):
+                 fullscreen=True,period=0.01,wallmode='death'):
         
         # setup
         self.tk = Tk()
@@ -28,10 +28,13 @@ class Environment():
         
         # walls...
         self.wall = dict()
-        Wall(self,width-9,10,width+1,height-9)
-        Wall(self,0,10,10,height-9)
-        Wall(self,0,0,width+1,10)
-        Wall(self,0,height-9,width+1,height+1)
+        if wallmode == 'death':
+            Wall(self,width-9,10,width+1,height-9)
+            Wall(self,0,10,10,height-9)
+            Wall(self,0,0,width+1,10)
+            Wall(self,0,height-9,width+1,height+1)
+        elif wallmode == 'wrap':
+            WrapBox(self,corners=(0,0,width,height),thickness=20)
         
         # fish...
         self.fish = dict()
@@ -42,6 +45,7 @@ class Environment():
         if player == 'none':
             self.tk.bind('f',self.spawn_fish)
             self.tk.bind('s',self.spawn_shark)
+            self.tk.bind('c',self.clear)
         elif player == 'fish':
             Fish(self,mode='player',loc='random')
             i += 1
@@ -84,6 +88,12 @@ class Environment():
     
     def exit(self,event):
         self.go = False
+    
+    def clear(self,event):
+        for shark in self.shark.values():
+            shark.set_dead()
+        for fish in self.fish.values():
+            fish.set_dead()
 
 
 class Wall():
@@ -125,8 +135,65 @@ class Wall():
                 self.master.fish[ID].set_dead()
             elif self.master.label[ID] == 'shark':
                 self.master.shark[ID].set_dead()
+                
 
-
+class WrapBox():
+    
+    def __init__(self,master,corners,thickness):
+        
+        self.master = master
+        self.can = self.master.can
+        
+        (xl,yt,xr,yb) = corners
+        self.top = (xl,yt,xr+1,yt+thickness)
+        self.bot = (xl,yb-thickness+1,xr+1,yb+1)
+        self.left = (xl,yt+thickness,xl+thickness,yb-thickness)
+        self.right = (xr-thickness+1,yt+thickness,xr+1,yb-thickness)
+        top = self.can.create_rectangle(*self.top,fill='green')
+        bot = self.can.create_rectangle(*self.bot,fill='green')
+        left = self.can.create_rectangle(*self.left,fill='green')
+        right = self.can.create_rectangle(*self.right,fill='green')
+        self.spawn_xl = xl + thickness + 20
+        self.spawn_xr = xr - thickness - 21
+        self.spawn_yt = yt + thickness + 20
+        self.spawn_yb = yb - thickness - 21
+        
+        self.master.label[top] = 'wrap'
+        self.master.label[bot] = 'wrap'
+        self.master.label[left] = 'wrap'
+        self.master.label[right] = 'wrap'
+        
+        self.master.wall[top] = self
+        self.master.wall[bot] = self
+        self.master.wall[left] = self
+        self.master.wall[right] = self
+        
+    def update(self):
+        for ID in self.can.find_overlapping(*self.top):
+            label = self.master.label[ID]
+            if label == 'fish':
+                self.master.fish[ID].y = self.spawn_yb
+            elif label == 'shark':
+                self.master.shark[ID].y = self.spawn_yb
+        for ID in self.can.find_overlapping(*self.bot):
+            label = self.master.label[ID]
+            if label == 'fish':
+                self.master.fish[ID].y = self.spawn_yt
+            elif label == 'shark':
+                self.master.shark[ID].y = self.spawn_yt
+        for ID in self.can.find_overlapping(*self.left):
+            label = self.master.label[ID]
+            if label == 'fish':
+                self.master.fish[ID].x = self.spawn_xr
+            elif label == 'shark':
+                self.master.shark[ID].x = self.spawn_xr
+        for ID in self.can.find_overlapping(*self.right):
+            label = self.master.label[ID]
+            if label == 'fish':
+                self.master.fish[ID].x = self.spawn_xl
+            elif label == 'shark':
+                self.master.shark[ID].x = self.spawn_xl
+                
 class Fish():
     
     def __init__(self,master,loc='random',mode='auto',velocity=2,agility=pi/10,
@@ -163,7 +230,7 @@ class Fish():
         
         # messages / observed info from neighbors
         self.inbox = deque()
-        self.weight = {'wall':5,'ofish':0.2,'ifish':2,'ishark':5,'oshark':10}
+        self.weight = {'wall':5,'ofish':0.2,'ifish':2,'ishark':5,'oshark':500}
         
         # reference in master
         self.set_body_ID(self.body)
@@ -655,4 +722,4 @@ class Shark():
         else:
             self.v = 0
 
-env = Environment(width=600,height=600,period=0.01)
+env = Environment(width=600,height=600,period=0.01,wallmode='wrap')
