@@ -42,17 +42,19 @@ class Environment():
         if pillar_mode != 'none':
             if pillar_mode == 'grid':
                 x,y = pillar_grid_shape
-                dx = (self.width - 100) / x
-                dy = (self.height - 100) / y
-                xl = 50
-                yt = 50
+                dx = (self.width - 100) / (x+1-pillar_density)
+                dy = (self.height - 100) / (y+1-pillar_density)
                 w = dx * pillar_density
+                sx = dx - w
                 l = dy * pillar_density
+                sy = dy - l
+                xl = 50 + sx
+                yt = 50 + sy
                 for i in range(x):
                     for j in range(y):
                         self.spawn_pillar(None,(xl,yt,xl+w,yt+l))
                         yt += dy
-                    yt = 50
+                    yt = 50 + sy
                     xl += dx
                         
         
