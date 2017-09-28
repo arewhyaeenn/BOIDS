@@ -7,8 +7,11 @@ from collections import deque
 
 class Environment():
     
-    def __init__(self,nfish=0,player='none',width=1535,height=862,
-                 fullscreen=True,period=0.01,wallmode='death'):
+    def __init__(self,nfish=0,player='none',
+                 width=1535,height=862,
+                 fullscreen=True,period=0.01,
+                 wallmode='death',pillar_mode='none',
+                 pillar_grid_shape=(10,10),pillar_density=.5):
         
         # setup
         self.tk = Tk()
@@ -26,8 +29,9 @@ class Environment():
         # categorize other objects as 'fish', 'wall', etc
         self.label = dict()
         
-        # walls...
+        # walls / terrain
         self.wall = dict()
+        self.pillar = dict()
         if wallmode == 'death':
             Wall(self,width-9,10,width+1,height-9)
             Wall(self,0,10,10,height-9)
@@ -35,17 +39,36 @@ class Environment():
             Wall(self,0,height-9,width+1,height+1)
         elif wallmode == 'wrap':
             WrapBox(self,corners=(0,0,width,height),thickness=20)
+        if pillar_mode != 'none':
+            if pillar_mode == 'grid':
+                x,y = pillar_grid_shape
+                dx = (self.width - 100) / x
+                dy = (self.height - 100) / y
+                xl = 50
+                yt = 50
+                w = dx * pillar_density
+                l = dy * pillar_density
+                for i in range(x):
+                    for j in range(y):
+                        self.spawn_pillar(None,(xl,yt,xl+w,yt+l))
+                        yt += dy
+                    yt = 50
+                    xl += dx
+                        
         
         # fish...
         self.fish = dict()
         self.shark = dict()
         self.ohood = dict() # neighborhood oval IDs to agents
         self.ihood = dict()
+        self.thood = dict()
+        
         i = 0
         if player == 'none':
             self.tk.bind('f',self.spawn_fish)
             self.tk.bind('s',self.spawn_shark)
             self.tk.bind('c',self.clear)
+            self.tk.bind('p',self.spawn_pillar)
         elif player == 'fish':
             Fish(self,mode='player',loc='random')
             i += 1
@@ -86,6 +109,17 @@ class Environment():
     def spawn_shark(self,event):
         Shark(self)
     
+    def spawn_pillar(self,event,coords='random'):
+        if coords == 'random':
+            radius = np.random.randint(5,int(min(self.width,
+                                                 self.height)/20))
+            x = np.random.randint(40+radius,self.width-40-radius)
+            y = np.random.randint(40+radius,self.height-40-radius)
+            coords = (x-radius,y-radius,x+radius,y+radius)
+            Wall(self,*coords,mode='pillar')
+        else:
+            Wall(self,*coords,mode='pillar')
+    
     def exit(self,event):
         self.go = False
     
@@ -94,48 +128,68 @@ class Environment():
             shark.set_dead()
         for fish in self.fish.values():
             fish.set_dead()
+        for pillar in self.pillar.values():
+            pillar.set_demo()
 
 
 class Wall():
     
-    def __init__(self,master,x1,y1,x2,y2):
+    def __init__(self,master,x1,y1,x2,y2,mode='wall'):
         self.master = master
         self.can = self.master.can
         self.body = self.can.create_rectangle(x1,y1,x2,y2,fill='red',tags=('wall'))
-        self.set_body_ID(self.body)
         self.coords = (x1,y1,x2,y2)
         self.label = 'wall'
+        self.mode = mode
+        self.set_body_ID(self.body)
+        self.alive = True
         
     def set_body_ID(self,ID):
-        self.master.wall[ID] = self
         self.master.label[ID] = 'wall'
+        self.master.wall[ID] = self
+        if self.mode == 'pillar':
+            self.master.pillar[ID] = self
+    
+    def set_demo(self):
+        self.alive = False
     
     # kill fish who crash, tell nearby fish it's here...
     def update(self):
-        for ID in self.can.find_overlapping(*self.coords):
-            label = self.master.label[ID]
-            if label == 'ohood':
-                (x1,y1,x2,y2) = self.coords
-                agent = self.master.ohood[ID]
-                (X,Y) = agent.get_loc()
-                if X < x1:
-                    x = x1
-                elif X > x2:
-                    x = x2
-                else:
-                    x = X
-                if Y < y1:
-                    y = y1
-                elif Y > y2:
-                    y = y2
-                else:
-                    y = Y
-                agent.update_inbox(('wall',None,x,y,self.body))
-            elif self.master.label[ID] == 'fish':
-                self.master.fish[ID].set_dead()
-            elif self.master.label[ID] == 'shark':
-                self.master.shark[ID].set_dead()
-                
+        if self.alive:
+            for ID in self.can.find_overlapping(*self.coords):
+                label = self.master.label[ID]
+                if label in ('ohood','ihood','thood'):
+                    (x1,y1,x2,y2) = self.coords
+                    agent = eval('self.master.'+label+'['+str(ID)+']')
+                    (X,Y) = agent.get_loc()
+                    if X < x1:
+                        x = x1
+                    elif X > x2:
+                        x = x2
+                    else:
+                        x = X
+                    if Y < y1:
+                        y = y1
+                    elif Y > y2:
+                        y = y2
+                    else:
+                        y = Y
+                    agent.update_inbox((label[0]+'wall',None,x,y,self.body))
+                elif self.master.label[ID] == 'fish':
+                    self.master.fish[ID].set_dead()
+                elif self.master.label[ID] == 'shark':
+                    self.master.shark[ID].set_dead()
+        else:
+            self.demolish()
+                    
+    def demolish(self):
+        del self.master.label[self.body]
+        del self.master.wall[self.body]
+        if self.mode == 'pillar':
+            del self.master.pillar[self.body]
+        self.can.delete(self.body)
+        del self
+
 
 class WrapBox():
     
@@ -153,10 +207,10 @@ class WrapBox():
         bot = self.can.create_rectangle(*self.bot,fill='green')
         left = self.can.create_rectangle(*self.left,fill='green')
         right = self.can.create_rectangle(*self.right,fill='green')
-        self.spawn_xl = xl + thickness + 20
-        self.spawn_xr = xr - thickness - 21
-        self.spawn_yt = yt + thickness + 20
-        self.spawn_yb = yb - thickness - 21
+        self.spawn_xl = xl + thickness + 5
+        self.spawn_xr = xr - thickness - 6
+        self.spawn_yt = yt + thickness + 5
+        self.spawn_yb = yb - thickness - 6
         
         self.master.label[top] = 'wrap'
         self.master.label[bot] = 'wrap'
@@ -197,7 +251,7 @@ class WrapBox():
 class Fish():
     
     def __init__(self,master,loc='random',mode='auto',velocity=2,agility=pi/10,
-                 radius=100):
+                 orad=50,irad=10,trad=5):
         
         # oop setup
         self.master = master
@@ -217,25 +271,37 @@ class Fish():
             self.x,self.y,self.t = loc
         self.body = self.can.create_polygon(*self.get_body_coord(),
                                             fill='blue')
-        # "neighborhoods", outer and inner (inner repels...)
-        self.radius = radius
+        # "neighborhoods"
+        self.orad = orad
+        self.irad = irad
+        self.trad = trad
+        # outer
         self.ohood = self.can.create_oval(*self.get_ohood_coord(),
-                                         width=self.radius/2,
+                                         width=1.5*self.orad,
                                          outline=self.tk.cget('bg'))
+        # inner
         self.ihood = self.can.create_oval(*self.get_ihood_coord(),
-                                          width=self.radius/8,
+                                          width=self.irad,
                                           outline=self.tk.cget('bg'))
+        # terrain
+        self.thood = self.can.create_oval(*self.get_thood_coord(),
+                                          width=self.trad,
+                                          outline=self.tk.cget('bg'))
+        self.can.lower(self.thood)
         self.can.lower(self.ihood)
         self.can.lower(self.ohood)
         
         # messages / observed info from neighbors
         self.inbox = deque()
-        self.weight = {'wall':5,'ofish':0.2,'ifish':2,'ishark':5,'oshark':500}
+        self.weight = {'owall':0,'iwall':5,'twall':10,
+                       'ofish':0.2,'ifish':2,
+                       'oshark':5,'ishark':5}
         
         # reference in master
         self.set_body_ID(self.body)
         self.set_ohood_ID(self.ohood)
         self.set_ihood_ID(self.ihood)
+        self.set_thood_ID(self.thood)
         
         # who's gonna play as a single fish anyway...
         if mode == 'player':
@@ -259,6 +325,10 @@ class Fish():
         self.master.ihood[ID] = self
         self.master.label[ID] = 'ihood'
     
+    def set_thood_ID(self,ID):
+        self.master.thood[ID] = self
+        self.master.label[ID] = 'thood'
+    
     def set_dead(self):
         self.alive = False
 
@@ -273,7 +343,7 @@ class Fish():
         return (xf,yf,xl,yl,xr,yr)
     
     def get_ohood_coord(self):
-        r = self.radius/2
+        r = self.orad
         x1 = self.x - r
         y1 = self.y - r
         x2 = self.x + r
@@ -281,13 +351,19 @@ class Fish():
         return (x1,y1,x2,y2)
     
     def get_ihood_coord(self):
-        r = self.radius/8
+        r = self.irad
         x1 = self.x - r
         y1 = self.y - r
         x2 = self.x + r
         y2 = self.y + r
         return (x1,y1,x2,y2)
     
+    def get_thood_coord(self):
+        r = self.trad
+        x = self.x + 2*r*cos(self.t)
+        y = self.y - 2*r*sin(self.t)
+        return(x-r,y-r,x+r,y+r)
+        
     def get_loc(self):
         return (self.x, self.y)
     
@@ -324,10 +400,10 @@ class Fish():
             h = self.t
             while self.inbox:
                 label,t,x,y,ID = self.inbox.popleft()
-                if label == 'wall':
+                if label in ['iwall','twall']:
                     dx = self.x - x # target direction x vector
                     dy = y - self.y
-                    weight = self.weight['wall'] # /(tx**2+ty**2) # maybe make stronger if closer
+                    weight = self.weight[label] # /(tx**2+ty**2) # maybe make stronger if closer
                     if dx > 0:
                         dt = atan(dy / dx)
                     elif dx < 0:
@@ -430,6 +506,7 @@ class Fish():
             self.can.coords(self.body,self.get_body_coord())
             self.can.coords(self.ohood,self.get_ohood_coord())
             self.can.coords(self.ihood,self.get_ihood_coord())
+            self.can.coords(self.thood,self.get_thood_coord())
         else:
             self.die()
     
@@ -437,9 +514,15 @@ class Fish():
         self.can.delete(self.body)
         self.can.delete(self.ohood)
         self.can.delete(self.ihood)
+        self.can.delete(self.thood)
         del self.master.fish[self.body]
         del self.master.ohood[self.ohood]
         del self.master.ihood[self.ihood]
+        del self.master.thood[self.thood]
+        del self.master.label[self.body]
+        del self.master.label[self.ohood]
+        del self.master.label[self.ihood]
+        del self.master.label[self.thood]
         del self
     
     def right(self,event):
@@ -461,7 +544,7 @@ class Fish():
 class Shark():
     
     def __init__(self,master,loc='random',mode='auto',velocity=2.25,agility=pi/30,
-                 radius=100):
+                 orad=50,irad=10,trad=15):
         
         # oop setup
         self.master = master
@@ -483,24 +566,33 @@ class Shark():
         self.body = self.can.create_polygon(*self.get_body_coord(),
                                             fill='red')
         # "neighborhoods", outer and inner (inner repels...)
-        self.radius = radius
+        self.orad = orad
+        self.irad = irad
+        self.trad = trad
         self.ohood = self.can.create_oval(*self.get_ohood_coord(),
-                                         width=3*self.radius/2,
+                                         width=1.5*self.orad,
                                          outline=self.tk.cget('bg'))
         self.ihood = self.can.create_oval(*self.get_ihood_coord(),
-                                          width=self.radius/15,
+                                          width=self.irad,
                                           outline=self.tk.cget('bg'))
+        self.thood = self.can.create_oval(*self.get_thood_coord(),
+                                          width=self.trad,
+                                          outline=self.tk.cget('bg'))
+        self.can.lower(self.thood)
         self.can.lower(self.ihood)
         self.can.lower(self.ohood)
         
         # messages / observed info from neighbors
         self.inbox = deque()
-        self.weight = {'wall':1,'ofish':5,'ifish':0,'oshark':0.5,'ishark':5}
+        self.weight = {'owall':0,'iwall':5,'twall':10,
+                       'ofish':5,'ifish':5,
+                       'oshark':0.5,'ishark':5}
         
         # reference in master
         self.set_body_ID(self.body)
         self.set_ohood_ID(self.ohood)
         self.set_ihood_ID(self.ihood)
+        self.set_thood_ID(self.thood)
         
         # who's gonna play as a single fish anyway...
         if mode == 'player':
@@ -524,6 +616,10 @@ class Shark():
         self.master.ihood[ID] = self
         self.master.label[ID] = 'ihood'
     
+    def set_thood_ID(self,ID):
+        self.master.thood[ID] = self
+        self.master.label[ID] = 'thood'
+    
     def get_body_coord(self):
         xf = self.x + 12*cos(self.t)
         yf = self.y - 12*sin(self.t)
@@ -534,7 +630,7 @@ class Shark():
         return (xf,yf,xl,yl,xr,yr)
     
     def get_ohood_coord(self):
-        r = self.radius/2
+        r = self.orad
         x1 = self.x - r
         y1 = self.y - r
         x2 = self.x + r
@@ -542,12 +638,18 @@ class Shark():
         return (x1,y1,x2,y2)
     
     def get_ihood_coord(self):
-        r = self.radius/12
+        r = self.irad
         x1 = self.x - r
         y1 = self.y - r
         x2 = self.x + r
         y2 = self.y + r
         return (x1,y1,x2,y2)
+    
+    def get_thood_coord(self):
+        r = self.trad
+        x = self.x + 2*r*cos(self.t)
+        y = self.y - 2*r*sin(self.t)
+        return(x-r,y-r,x+r,y+r)
     
     def get_loc(self):
         return (self.x, self.y)
@@ -586,10 +688,10 @@ class Shark():
             h = self.t
             while self.inbox:
                 label,t,x,y,ID = self.inbox.popleft()
-                if label == 'wall':
+                if label in ['iwall','twall']:
                     dx = self.x - x # target direction x vector
                     dy = y - self.y
-                    weight = self.weight['wall'] # /(tx**2+ty**2) # maybe make stronger if closer
+                    weight = self.weight[label]
                     if dx > 0:
                         dt = atan(dy / dx)
                     elif dx < 0:
@@ -692,6 +794,7 @@ class Shark():
             self.can.coords(self.body,self.get_body_coord())
             self.can.coords(self.ohood,self.get_ohood_coord())
             self.can.coords(self.ihood,self.get_ihood_coord())
+            self.can.coords(self.thood,self.get_thood_coord())
         else:
             self.die()
     
@@ -702,9 +805,15 @@ class Shark():
         self.can.delete(self.body)
         self.can.delete(self.ohood)
         self.can.delete(self.ihood)
+        self.can.delete(self.thood)
         del self.master.shark[self.body]
         del self.master.ohood[self.ohood]
         del self.master.ihood[self.ihood]
+        del self.master.thood[self.thood]
+        del self.master.label[self.body]
+        del self.master.label[self.ohood]
+        del self.master.label[self.ihood]
+        del self.master.label[self.thood]
         del self
     
     def right(self,event):
@@ -722,4 +831,5 @@ class Shark():
         else:
             self.v = 0
 
-env = Environment(width=600,height=600,period=0.01,wallmode='wrap')
+env = Environment(width=600,height=600,period=0.01,wallmode='wrap',
+                  pillar_mode='grid',pillar_grid_shape = (5,5),pillar_density=2/3)
