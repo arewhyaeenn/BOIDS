@@ -2,7 +2,7 @@ from tkinter import *
 from time import sleep
 from math import sin, cos, atan, pi, fabs
 import numpy as np
-from collections import deque
+from collections import deque, Counter
 
 
 class Environment():
@@ -80,6 +80,7 @@ class Environment():
         self.ihood = dict()
         self.thood = dict()
         
+        # expand player controls to all types at some point..
         i = 0
         if player == 'none':
             self.tk.bind('f',self.spawn_fish)
@@ -87,6 +88,7 @@ class Environment():
             self.tk.bind('c',self.clear)
             self.tk.bind('p',self.spawn_pillar)
             self.tk.bind('d',self.spawn_food)
+            self.tk.bind('b',self.scoreboard)
         elif player == 'fish':
             Fish(self,mode='player',loc='random')
             i += 1
@@ -95,6 +97,11 @@ class Environment():
             i +=1
         
         self.tk.bind('<Return>',self.exit)
+        
+        # scoreboards
+        self.fodeath = Counter()
+        self.fdeath = Counter()
+        self.sdeath = Counter()
         
         # go time
         self.mainloop()
@@ -133,7 +140,17 @@ class Environment():
             self.tk.update()
             self.tk.update_idletasks()
             sleep(self.period)
+        self.scoreboard(None)
         self.tk.destroy()
+    
+    def scoreboard(self,event):
+        print('Food Eaten :',self.fodeath['eaten'])
+        print('Fish Causes of Death:')
+        for CoD in self.fdeath:
+            print('  ',CoD.ljust(10),':',str(self.fdeath[CoD]).rjust(10))
+        print('Shark Causes of Death:')
+        for CoD in self.sdeath:
+            print('  ',CoD.ljust(10),':',str(self.sdeath[CoD]).rjust(10))
     
     def get_random_spawn_coords(self):
         n = np.random.randint(0,4)
@@ -177,9 +194,9 @@ class Environment():
     
     def clear(self,event):
         for shark in self.shark.values():
-            shark.set_dead()
+            shark.set_dead('smote')
         for fish in self.fish.values():
-            fish.set_dead()
+            fish.set_dead('smote')
         for pillar in self.pillar.values():
             pillar.set_demo()
 
@@ -228,9 +245,9 @@ class Wall():
                         y = Y
                     agent.update_inbox((label[0]+'wall',None,x,y,self.body))
                 elif self.master.label[ID] == 'fish':
-                    self.master.fish[ID].set_dead()
+                    self.master.fish[ID].set_dead('wall')
                 elif self.master.label[ID] == 'shark':
-                    self.master.shark[ID].set_dead()
+                    self.master.shark[ID].set_dead('wall')
         else:
             self.demolish()
                     
@@ -346,7 +363,8 @@ class Fish_Food():
         else:
             self.die()
     
-    def set_dead(self):
+    def set_dead(self,CoD):
+        self.master.fodeath[CoD] += 1
         self.alive = False
     
     def die(self): #TODO
@@ -402,10 +420,10 @@ class Fish():
         
         # messages / observed info from neighbors
         self.inbox = deque()
-        self.weight = {'iwall':50,'twall':50,
-                       'ofish':0.2,'ifish':4,
-                       'oshark':25,'ishark':50,
-                       'ofood':3,'ifood':4,'tfood':5}
+        self.weight = {'iwall':5,'twall':20,
+                       'ofish':2,'ifish':4,
+                       'oshark':10,'ishark':10,
+                       'ofood':1,'ifood':3,'tfood':3}
         
         # reference in master
         self.set_body_ID(self.body)
@@ -439,7 +457,8 @@ class Fish():
         self.master.thood[ID] = self
         self.master.label[ID] = 'thood'
     
-    def set_dead(self):
+    def set_dead(self,CoD):
+        self.master.fdeath[CoD] += 1
         self.alive = False
 
     # corners of triangular body
@@ -493,7 +512,7 @@ class Fish():
                                         self.x,self.y,self.body))
             elif label == 'food':
                 agent = self.master.food[ID]
-                agent.set_dead()
+                agent.set_dead('eaten')
                 self.score += 1
                 self.spawn_clock += 1
                 if self.spawn_clock == self.spawn_threshold:
@@ -590,29 +609,26 @@ class Fish():
                             dt = -pi/2
                         else:
                             dt = self.t
+                    while dt - h > pi:
+                        dt -= 2*pi
+                    while h - dt > pi:
+                        dt += 2*pi
+                    h += (dt - h) / wt[label]
                     while dt - t > pi:
                         dt -= 2*pi
                     while t - dt > pi:
                         dt += 2*pi
-                    if fabs(dt - t) >= pi/2:
+                    if fabs(dt - t) < pi/2:
+                        wt[label] += 1
+                        if dt - t > 0:
+                            dt = t + pi/2
+                        else:
+                            dt = t - pi/2
                         while dt - h > pi:
                             dt -= 2*pi
                         while h - dt > pi:
                             dt += 2*pi
-                    else:
-                        if dt - t > 0:
-                            dt = t + pi/2
-                            while dt - h > pi:
-                                dt -= 2*pi
-                            while h - dt > pi:
-                                dt += 2*pi
-                        else:
-                            dt = t - pi/2
-                            while dt - h > pi:
-                                dt -= 2*pi
-                            while h - dt > pi:
-                                dt += 2*pi    
-                    h += (dt - h) / wt[label]
+                        h += (dt - h) / wt[label]
                     stim[label] = h
                 elif label[1:] == 'food':
                     wt[label] += 1
@@ -639,8 +655,7 @@ class Fish():
             h = self.t
             net = 1
             for label in wt:
-                w = wt[label]
-                if w:
+                if wt[label]:
                     w = self.weight[label]
                     net += w
                     dt = stim[label]
@@ -701,7 +716,7 @@ class Fish():
 
 class Shark():
     
-    def __init__(self,master,loc='random',mode='auto',velocity=3.1,agility=pi/30,
+    def __init__(self,master,loc='random',mode='auto',velocity=3.1,agility=pi/25,
                  orad=100,irad=10,trad=30,fish_to_spawn=25,vitality=2500):
         
         # oop setup
@@ -741,13 +756,13 @@ class Shark():
         self.thood = self.can.create_oval(*self.get_thood_coord(),
                                           width=self.trad,
                                           outline=self.tk.cget('bg'))
-        self.can.lower(self.thood)
         self.can.lower(self.ihood)
+        self.can.lower(self.thood)
         self.can.lower(self.ohood)
         
         # messages / observed info from neighbors
         self.inbox = deque()
-        self.weight = {'twall':200,
+        self.weight = {'twall':20,
                        'ofish':3,'tfish':4,
                        'oshark':1,'ishark':10}
         
@@ -857,7 +872,7 @@ class Shark():
     def auto_update(self):
         self.vitality -= 1
         if self.vitality == 0:
-            self.set_dead()
+            self.set_dead('starvation')
         if self.alive:
             wt = {'twall':0,
                   'ofish':0,'ifish':0,'tfish':0,
@@ -917,7 +932,7 @@ class Shark():
                         self.master.spawn_shark(None,(self.x,self.y,self.t))
                         self.spawn_clock = 0
                         self.children += 1
-                    self.master.fish[ID].set_dead()
+                    self.master.fish[ID].set_dead('eaten')
                     self.vitality = min(self.vitality+100,self.max_vitality)
                 elif label == 'ishark':
                     wt[label] += 1
@@ -996,7 +1011,8 @@ class Shark():
         else:
             self.die()
     
-    def set_dead(self):
+    def set_dead(self,CoD):
+        self.master.sdeath[CoD] += 1
         self.alive = False
     
     def die(self):
@@ -1033,7 +1049,7 @@ class Shark():
             self.v = 0
 
 env = Environment(width=500,height=700,period=0.01,wallmode='wrap',
-                  pillar_mode='grid',pillar_grid_shape=(5,7),
+                  pillar_mode='grid',pillar_grid_shape=(3,4),
                   pillar_density=.25,food_spawn_period=3,
                   fish_spawn_threshold=10,shark_spawn_threshold=200,
                   shark_max_vitality=2500,
